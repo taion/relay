@@ -63,11 +63,18 @@ class RelayDefaultNetworkLayer {
   }
 
   sendQueries(requests: Array<RelayQueryRequest>): ?Promise<any> {
-    return Promise.all(requests.map(request => (
-      this._sendQuery(request).then(
-        result => result.json()
-      ).then(payload => {
-        if (payload.hasOwnProperty('errors')) {
+    return this._sendQueries(requests).then(
+      result => result.json()
+    ).then(payloads => {
+      requests.forEach((request, index) => {
+        let payload;
+        if (payloads && payloads[index]) {
+          payload = payloads[index];
+        } else {
+          payload = payloads;
+        }
+
+        if (Object.prototype.hasOwnProperty.call(payload, 'errors')) {
           const error = new Error(
             'Server request for query `' + request.getDebugName() + '` ' +
             'failed for the following reasons:\n\n' +
@@ -75,7 +82,7 @@ class RelayDefaultNetworkLayer {
           );
           (error: any).source = payload;
           request.reject(error);
-        } else if (!payload.hasOwnProperty('data')) {
+        } else if (!Object.prototype.hasOwnProperty.call(payload, 'data')) {
           request.reject(new Error(
             'Server response was missing for query `' + request.getDebugName() +
             '`.'
@@ -83,10 +90,10 @@ class RelayDefaultNetworkLayer {
         } else {
           request.resolve({response: payload.data});
         }
-      }).catch(
-        error => request.reject(error)
-      )
-    )));
+      })
+    }).catch(
+      error => requests.forEach(request => request.reject(error))
+    );
   }
 
   supports(...options: Array<string>): boolean {
@@ -138,13 +145,13 @@ class RelayDefaultNetworkLayer {
   /**
    * Sends a POST request and retries if the request fails or times out.
    */
-  _sendQuery(request: RelayQueryRequest): Promise<any> {
+  _sendQueries(requests: Array<RelayQueryRequest>): Promise<any> {
     return fetchWithRetries(this._uri, {
       ...this._init,
-      body: JSON.stringify({
+      body: JSON.stringify(requests.map(request => ({
         query: request.getQueryString(),
         variables: request.getVariables(),
-      }),
+      }))),
       headers: {
         ...this._init.headers,
         'Accept': '*/*',

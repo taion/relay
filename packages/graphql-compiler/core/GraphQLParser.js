@@ -1,5 +1,5 @@
 /**
- * Copyright (c) 2013-present, Facebook, Inc.
+ * Copyright (c) Facebook, Inc. and its affiliates.
  *
  * This source code is licensed under the MIT license found in the
  * LICENSE file in the root directory of this source tree.
@@ -67,17 +67,17 @@ import type {
   FieldNode,
   FragmentDefinitionNode,
   FragmentSpreadNode,
+  GraphQLArgument,
+  GraphQLField,
+  GraphQLInputType,
+  GraphQLOutputType,
+  GraphQLSchema,
   InlineFragmentNode,
   OperationDefinitionNode,
   SelectionSetNode,
   ValueNode,
   VariableDefinitionNode,
   VariableNode,
-  GraphQLInputType,
-  GraphQLOutputType,
-  GraphQLSchema,
-  GraphQLArgument,
-  GraphQLField,
 } from 'graphql';
 
 const ARGUMENT_DEFINITIONS = 'argumentDefinitions';
@@ -150,7 +150,7 @@ class GraphQLParser {
     parentType: GraphQLOutputType,
     fieldName: string,
     fieldAST: FieldNode,
-  ): ?GraphQLField<*, *> {
+  ): ?GraphQLField<mixed, mixed> {
     const type = getRawType(parentType);
     const isQueryType = type === this._schema.getQueryType();
     const hasTypeName =
@@ -418,7 +418,6 @@ class GraphQLParser {
       operation,
       metadata: null,
       name,
-      dependentRequests: [],
       argumentDefinitions,
       directives,
       selections,
@@ -613,14 +612,13 @@ class GraphQLParser {
       const selections = field.selectionSet
         ? this._transformSelections(field.selectionSet, type)
         : null;
-      invariant(
-        selections && selections.length,
-        'GraphQLParser: Expected at least one selection for non-scalar field ' +
-          '`%s` on type `%s`. Source: %s.',
-        name,
-        type,
-        this._getErrorContext(),
-      );
+      if (selections == null || selections.length === 0) {
+        throw new Error(
+          'GraphQLParser: Expected at least one selection for non-scalar ' +
+            `field \`${name}\` on type \`${String(type)}\`. ` +
+            `Source: ${this._getErrorContext()}.`,
+        );
+      }
       return {
         kind: 'LinkedField',
         alias,
@@ -637,9 +635,9 @@ class GraphQLParser {
 
   _transformHandle(
     fieldName: string,
-    fieldArgs: Array<Argument>,
-    clientFieldDirectives: Array<DirectiveNode>,
-  ): ?Array<Handle> {
+    fieldArgs: $ReadOnlyArray<Argument>,
+    clientFieldDirectives: $ReadOnlyArray<DirectiveNode>,
+  ): ?$ReadOnlyArray<Handle> {
     let handles: ?Array<Handle>;
     clientFieldDirectives.forEach(clientFieldDirective => {
       const handleArgument = (clientFieldDirective.arguments || []).find(
@@ -759,39 +757,37 @@ class GraphQLParser {
   }
 
   _splitConditions(
-    mixedDirectives: Array<Directive>,
-  ): [Array<Condition>, Array<Directive>] {
-    const conditions = [];
-    const directives = [];
-    mixedDirectives.forEach(directive => {
-      if (directive.name === INCLUDE || directive.name === SKIP) {
-        const passingValue = directive.name === INCLUDE;
-        const arg = directive.args[0];
-        invariant(
-          arg && arg.name === IF,
-          'GraphQLParser: Expected an `if` argument to @%s. Source: %s.',
-          directive.name,
-          this._getErrorContext(),
-        );
-        invariant(
-          arg.value.kind === 'Variable' || arg.value.kind === 'Literal',
-          'GraphQLParser: Expected the `if` argument to @%s to be a variable. ' +
-            'Source: %s.',
-          directive.name,
-          this._getErrorContext(),
-        );
-        conditions.push({
-          kind: 'Condition',
-          condition: arg.value,
-          metadata: null,
-          passingValue,
-          selections: [],
-        });
-      } else {
-        directives.push(directive);
-      }
+    mixedDirectives: $ReadOnlyArray<Directive>,
+  ): [$ReadOnlyArray<Condition>, $ReadOnlyArray<Directive>] {
+    const [conditionDirectives, otherDirectives] = partitionArray(
+      mixedDirectives,
+      directive => directive.name === INCLUDE || directive.name === SKIP,
+    );
+    const conditions = conditionDirectives.map(directive => {
+      const passingValue = directive.name === INCLUDE;
+      const arg = directive.args[0];
+      invariant(
+        arg && arg.name === IF,
+        'GraphQLParser: Expected an `if` argument to @%s. Source: %s.',
+        directive.name,
+        this._getErrorContext(),
+      );
+      invariant(
+        arg.value.kind === 'Variable' || arg.value.kind === 'Literal',
+        'GraphQLParser: Expected the `if` argument to @%s to be a variable. ' +
+          'Source: %s.',
+        directive.name,
+        this._getErrorContext(),
+      );
+      return {
+        kind: 'Condition',
+        condition: arg.value,
+        metadata: null,
+        passingValue,
+        selections: [],
+      };
     });
-    const sortedConditions = [...conditions].sort((a, b) => {
+    const sortedConditions = conditions.sort((a, b) => {
       if (a.condition.kind === 'Variable' && b.condition.kind === 'Variable') {
         return a.condition.variableName < b.condition.variableName
           ? -1
@@ -807,7 +803,7 @@ class GraphQLParser {
             : 0;
       }
     });
-    return [sortedConditions, directives];
+    return [sortedConditions, otherDirectives];
   }
 
   _transformVariable(ast: VariableNode, type?: ?GraphQLInputType): Variable {
@@ -989,9 +985,9 @@ function assertScalarFieldType(type: GraphQLOutputType): ScalarFieldType {
 }
 
 function applyConditions(
-  conditions: Array<Condition>,
-  selections: Array<Selection>,
-): Array<Condition | Selection> {
+  conditions: $ReadOnlyArray<Condition>,
+  selections: $ReadOnlyArray<Selection>,
+): $ReadOnlyArray<Condition | Selection> {
   let nextSelections = selections;
   conditions.forEach(condition => {
     nextSelections = [
@@ -1005,7 +1001,7 @@ function applyConditions(
 }
 
 function getName(ast): string {
-  const name = ast.name ? ast.name.value : null;
+  const name = ast.name?.value;
   invariant(
     typeof name === 'string',
     'GraphQLParser: Expected ast node `%s` to have a name.',
@@ -1021,18 +1017,18 @@ function getName(ast): string {
  */
 function partitionArray<Tv>(
   array: $ReadOnlyArray<Tv>,
-  predicate: (value: Tv, index: number, array: $ReadOnlyArray<Tv>) => boolean,
-  context?: any,
+  predicate: (value: Tv) => boolean,
 ): [Array<Tv>, Array<Tv>] {
-  var first = [];
-  var second = [];
-  array.forEach((element, index) => {
-    if (predicate.call(context, element, index, array)) {
-      first.push(element);
+  const first = [];
+  const second = [];
+  for (let i = 0; i < array.length; i++) {
+    const item = array[i];
+    if (predicate(item)) {
+      first.push(item);
     } else {
-      second.push(element);
+      second.push(item);
     }
-  });
+  }
   return [first, second];
 }
 

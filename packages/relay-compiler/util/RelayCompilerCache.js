@@ -1,5 +1,5 @@
 /**
- * Copyright (c) 2013-present, Facebook, Inc.
+ * Copyright (c) Facebook, Inc. and its affiliates.
  *
  * This source code is licensed under the MIT license found in the
  * LICENSE file in the root directory of this source tree.
@@ -48,7 +48,13 @@ class RelayCompilerCache<T> {
         .digest('hex');
       const dir = path.join(os.tmpdir(), `${this._name}-${cacheID}`);
       if (!fs.existsSync(dir)) {
-        fs.mkdirSync(dir);
+        try {
+          fs.mkdirSync(dir);
+        } catch (error) {
+          if (error.code !== 'EEXIST') {
+            throw error;
+          }
+        }
       }
       this._dir = dir;
     }
@@ -61,14 +67,14 @@ class RelayCompilerCache<T> {
       if (fs.existsSync(cacheFile)) {
         try {
           return JSON.parse(fs.readFileSync(cacheFile, 'utf8'));
-        } catch (e) {
+        } catch {
           // ignore
         }
       }
       const value = compute();
       try {
         fs.writeFileSync(cacheFile, JSON.stringify(value), 'utf8');
-      } catch (e) {
+      } catch {
         // ignore
       }
       return value;

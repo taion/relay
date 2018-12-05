@@ -1,5 +1,5 @@
 /**
- * Copyright (c) 2013-present, Facebook, Inc.
+ * Copyright (c) Facebook, Inc. and its affiliates.
  *
  * This source code is licensed under the MIT license found in the
  * LICENSE file in the root directory of this source tree.
@@ -16,21 +16,25 @@ const {GraphQLList} = require('graphql');
 const {IRVisitor, SchemaUtils} = require('graphql-compiler');
 const {getStorageKey, stableCopy} = require('relay-runtime');
 
-import type {Batch, Fragment} from 'graphql-compiler';
+import type {
+  Metadata,
+  Fragment,
+  Request,
+  SplitOperation,
+} from 'graphql-compiler';
 import type {
   ConcreteArgument,
   ConcreteArgumentDefinition,
-  ConcreteFragment,
   ConcreteField,
+  ConcreteFragment,
   ConcreteLinkedField,
-  ConcreteSelection,
+  ConcreteMatchField,
+  ConcreteRequest,
   ConcreteScalarField,
-  RequestNode,
+  ConcreteSelection,
+  ConcreteSplitOperation,
 } from 'relay-runtime';
 const {getRawType, isAbstractType, getNullableType} = SchemaUtils;
-
-declare function generate(node: Batch): RequestNode;
-declare function generate(node: Fragment): ConcreteFragment;
 
 /**
  * @public
@@ -38,9 +42,12 @@ declare function generate(node: Fragment): ConcreteFragment;
  * Converts a GraphQLIR node into a plain JS object representation that can be
  * used at runtime.
  */
-function generate(node: Batch | Fragment): RequestNode | ConcreteFragment {
+declare function generate(node: Fragment): ConcreteFragment;
+declare function generate(node: Request): ConcreteRequest;
+declare function generate(node: SplitOperation): ConcreteSplitOperation;
+function generate(node) {
   invariant(
-    ['Batch', 'Fragment'].indexOf(node.kind) >= 0,
+    ['Fragment', 'Request', 'SplitOperation'].indexOf(node.kind) >= 0,
     'RelayCodeGenerator: Unknown AST kind `%s`. Source: %s.',
     node.kind,
     getErrorMessage(node),
@@ -50,70 +57,22 @@ function generate(node: Batch | Fragment): RequestNode | ConcreteFragment {
 
 const RelayCodeGenVisitor = {
   leave: {
-    Batch(node): RequestNode {
-      invariant(node.requests.length !== 0, 'Batch must contain Requests.');
-      if (isSingleRequest(node)) {
-        const request = node.requests[0];
-        return {
-          kind: 'Request',
-          operationKind: request.root.operation,
-          name: node.name,
-          id: request.id,
-          text: request.text,
-          metadata: node.metadata,
-          fragment: node.fragment,
-          operation: {
-            kind: 'Operation',
-            name: request.root.name,
-            argumentDefinitions: request.root.argumentDefinitions,
-            selections: flattenArray(request.root.selections),
-          },
-        };
-      } else {
-        return {
-          kind: 'BatchRequest',
-          operationKind: node.requests[0].root.operation,
-          name: node.name,
-          metadata: node.metadata,
-          fragment: node.fragment,
-          requests: node.requests.map(request => {
-            const isDeferrableFragment =
-              request.metadata && request.metadata.deferrable;
-            const operation = isDeferrableFragment
-              ? {
-                  kind: 'DeferrableOperation',
-                  name: request.root.name,
-                  argumentDefinitions: request.root.argumentDefinitions,
-                  selections: flattenArray(request.root.selections),
-                  fragmentName: request.metadata.fragmentName,
-                  rootFieldVariable: request.metadata.rootFieldVariable,
-                }
-              : {
-                  kind: 'Operation',
-                  name: request.root.name,
-                  argumentDefinitions: request.root.argumentDefinitions,
-                  selections: flattenArray(request.root.selections),
-                };
-
-            return {
-              name: request.name,
-              id: request.id,
-              text: request.text,
-              argumentDependencies: request.argumentDependencies.map(
-                dependency => ({
-                  name: dependency.argumentName,
-                  fromRequestName: dependency.fromName,
-                  fromRequestPath: dependency.fromPath,
-                  ifList: dependency.ifList,
-                  ifNull: dependency.ifNull,
-                  maxRecurse: dependency.maxRecurse,
-                }),
-              ),
-              operation,
-            };
-          }),
-        };
-      }
+    Request(node): ConcreteRequest {
+      return {
+        kind: 'Request',
+        operationKind: node.root.operation,
+        name: node.name,
+        id: node.id,
+        text: node.text,
+        metadata: node.metadata,
+        fragment: node.fragment,
+        operation: {
+          kind: 'Operation',
+          name: node.root.name,
+          argumentDefinitions: node.root.argumentDefinitions,
+          selections: flattenArray(node.root.selections),
+        },
+      };
     },
 
     Fragment(node): ConcreteFragment {
@@ -167,15 +126,6 @@ const RelayCodeGenVisitor = {
       };
     },
 
-    DeferrableFragmentSpread(node): ConcreteSelection {
-      return {
-        kind: 'DeferrableFragmentSpread',
-        name: node.name,
-        args: valuesOrNull(sortByName(node.args)),
-        rootFieldVariable: node.rootFieldVariable,
-        storageKey: node.storageKey,
-      };
-    },
     InlineFragment(node): ConcreteSelection {
       return {
         kind: 'InlineFragment',
@@ -203,7 +153,7 @@ const RelayCodeGenVisitor = {
           })) ||
         [];
       const type = getRawType(node.type);
-      const field: ConcreteLinkedField = {
+      let field: ConcreteLinkedField = {
         kind: 'LinkedField',
         alias: node.alias,
         name: node.name,
@@ -214,8 +164,72 @@ const RelayCodeGenVisitor = {
         selections: flattenArray(node.selections),
       };
       // Precompute storageKey if possible
-      field.storageKey = getStaticStorageKey(field);
+      const storageKey = getStaticStorageKey(field, node.metadata);
+      if (storageKey) {
+        field = {...field, storageKey};
+      }
       return [field].concat(handles);
+    },
+
+    MatchField(node, key, parent, ancestors): ConcreteMatchField {
+      const selections = flattenArray(node.selections);
+      const matchesByType = {};
+      selections.forEach(selection => {
+        if (
+          selection.kind === 'ScalarField' &&
+          selection.name === '__typename'
+        ) {
+          // The RelayGenerateTypename transform will add a __typename selection
+          // to the selections of the match field.
+          return;
+        }
+        invariant(
+          selection.kind === 'MatchBranch',
+          'RelayCodeGenerator: Expected selection for MatchField %s to be ' +
+            'a `MatchBranch`, but instead got `%s`. Source: `%s`.',
+          node.alias ?? node.name,
+          selection.kind,
+          getErrorMessage(ancestors[0]),
+        );
+        invariant(
+          !matchesByType.hasOwnProperty(selection.type),
+          'RelayCodeGenerator: Each "match" type has to appear at-most once. ' +
+            'Type `%s` was duplicated. Source: %s.',
+          selection.type,
+          getErrorMessage(ancestors[0]),
+        );
+        const fragmentName = selection.name;
+        const regExpMatch = fragmentName.match(
+          /^([a-zA-Z][a-zA-Z0-9]*)(?:_([a-zA-Z][_a-zA-Z0-9]*))?$/,
+        );
+        if (!regExpMatch) {
+          throw new Error(
+            'RelayMatchTransform: Fragments should be named ' +
+              '`FragmentName_fragmentPropName`, got `' +
+              fragmentName +
+              '`.',
+          );
+        }
+        const fragmentPropName = regExpMatch[2] ?? 'matchData';
+        matchesByType[selection.type] = {
+          fragmentPropName,
+          fragmentName,
+        };
+      });
+      let field: ConcreteMatchField = {
+        kind: 'MatchField',
+        alias: node.alias,
+        name: node.name,
+        storageKey: null,
+        args: valuesOrNull(sortByName(node.args)),
+        matchesByType,
+      };
+      // Precompute storageKey if possible
+      const storageKey = getStaticStorageKey(field, node.metadata);
+      if (storageKey) {
+        field = {...field, storageKey};
+      }
+      return field;
     },
 
     ScalarField(node): Array<ConcreteSelection> {
@@ -236,17 +250,28 @@ const RelayCodeGenVisitor = {
             };
           })) ||
         [];
-      const field: ConcreteScalarField = {
+      let field: ConcreteScalarField = {
         kind: 'ScalarField',
         alias: node.alias,
         name: node.name,
         args: valuesOrNull(sortByName(node.args)),
-        selections: valuesOrUndefined(flattenArray(node.selections)),
         storageKey: null,
       };
       // Precompute storageKey if possible
-      field.storageKey = getStaticStorageKey(field);
+      const storageKey = getStaticStorageKey(field, node.metadata);
+      if (storageKey) {
+        field = {...field, storageKey};
+      }
       return [field].concat(handles);
+    },
+
+    SplitOperation(node, key, parent): ConcreteSplitOperation {
+      return {
+        kind: 'SplitOperation',
+        name: node.name,
+        metadata: null,
+        selections: flattenArray(node.selections),
+      };
     },
 
     Variable(node, key, parent): ConcreteArgument {
@@ -268,7 +293,7 @@ const RelayCodeGenVisitor = {
     },
 
     Argument(node, key, parent, ancestors): ?ConcreteArgument {
-      if (['Variable', 'Literal'].indexOf(node.value.kind) < 0) {
+      if (!['Variable', 'Literal'].includes(node.value.kind)) {
         const valueString = JSON.stringify(node.value, null, 2);
         throw new Error(
           'RelayCodeGenerator: Complex argument values (Lists or ' +
@@ -282,32 +307,27 @@ const RelayCodeGenVisitor = {
   },
 };
 
-function isSingleRequest(batch: Batch): boolean {
-  return (
-    batch.requests.length === 1 &&
-    batch.requests[0].argumentDependencies.length === 0
-  );
-}
-
 function isPlural(type: any): boolean {
   return getNullableType(type) instanceof GraphQLList;
 }
 
-function valuesOrUndefined<T>(array: ?Array<T>): ?Array<T> {
-  return !array || array.length === 0 ? undefined : array;
-}
-
-function valuesOrNull<T>(array: ?Array<T>): ?Array<T> {
+function valuesOrNull<T>(array: ?$ReadOnlyArray<T>): ?$ReadOnlyArray<T> {
   return !array || array.length === 0 ? null : array;
 }
 
-function flattenArray<T>(array: Array<Array<T>>): Array<T> {
+function flattenArray<T>(
+  array: $ReadOnlyArray<$ReadOnlyArray<T>>,
+): $ReadOnlyArray<T> {
   return array ? Array.prototype.concat.apply([], array) : [];
 }
 
-function sortByName<T: {name: string}>(array: Array<T>): Array<T> {
+function sortByName<T: {name: string}>(
+  array: $ReadOnlyArray<T>,
+): $ReadOnlyArray<T> {
   return array instanceof Array
-    ? array.sort((a, b) => (a.name < b.name ? -1 : a.name > b.name ? 1 : 0))
+    ? array
+        .slice()
+        .sort((a, b) => (a.name < b.name ? -1 : a.name > b.name ? 1 : 0))
     : array;
 }
 
@@ -320,7 +340,14 @@ function getErrorMessage(node: any): string {
  * generated for fields with supplied arguments that are all statically known
  * (ie. literals, no variables) at build time.
  */
-function getStaticStorageKey(field: ConcreteField): ?string {
+function getStaticStorageKey(
+  field: ConcreteField,
+  metadata: Metadata,
+): ?string {
+  const metadataStorageKey = metadata?.storageKey;
+  if (typeof metadataStorageKey === 'string') {
+    return metadataStorageKey;
+  }
   if (
     !field.args ||
     field.args.length === 0 ||

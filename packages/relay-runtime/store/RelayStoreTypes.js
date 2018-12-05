@@ -1,5 +1,5 @@
 /**
- * Copyright (c) 2013-present, Facebook, Inc.
+ * Copyright (c) Facebook, Inc. and its affiliates.
  *
  * This source code is licensed under the MIT license found in the
  * LICENSE file in the root directory of this source tree.
@@ -11,7 +11,7 @@
 'use strict';
 
 import type {
-  ExecutePayload,
+  GraphQLResponse,
   PayloadError,
   UploadableMap,
 } from '../network/RelayNetworkTypes';
@@ -23,8 +23,8 @@ import type {
   ConcreteLinkedField,
   ConcreteFragment,
   ConcreteSelectableNode,
-  RequestNode,
-  ConcreteOperation,
+  ConcreteRequest,
+  ConcreteSplitOperation,
 } from '../util/RelayConcreteNode';
 import type {DataID, Disposable, Variables} from '../util/RelayRuntimeTypes';
 import type {RecordState} from './RelayRecordState';
@@ -39,16 +39,18 @@ import type {
   Record,
 } from 'react-relay/classic/environment/RelayCombinedEnvironmentTypes';
 
-// eslint-disable-next-line no-undef
+export type {
+  SelectorData,
+} from 'react-relay/classic/environment/RelayCombinedEnvironmentTypes';
+
 export opaque type FragmentReference = empty;
 
 type TEnvironment = Environment;
 type TFragment = ConcreteFragment;
 type TGraphQLTaggedNode = GraphQLTaggedNode;
 type TNode = ConcreteSelectableNode;
-type TPayload = ExecutePayload;
-type TRequest = RequestNode;
-type TOperation = ConcreteOperation;
+type TPayload = GraphQLResponse;
+type TRequest = ConcreteRequest;
 
 export type FragmentMap = CFragmentMap<TFragment>;
 export type OperationSelector = COperationSelector<TNode, TRequest>;
@@ -61,7 +63,6 @@ export type UnstableEnvironmentCore = CUnstableEnvironmentCore<
   TGraphQLTaggedNode,
   TNode,
   TRequest,
-  TOperation,
 >;
 
 /**
@@ -139,7 +140,19 @@ export interface Store {
     snapshot: Snapshot,
     callback: (snapshot: Snapshot) => void,
   ): Disposable;
+
+  /**
+   * The method should disable garbage collection until
+   * the returned reference is disposed.
+   */
+  holdGC(): Disposable;
 }
+
+/**
+ * A type that accepts a callback and schedules it to run at some future time.
+ * By convention, implementations should not execute the callback immediately.
+ */
+export type Scheduler = (() => void) => void;
 
 /**
  * An interface for imperatively getting/setting properties of a `Record`. This interface
@@ -210,7 +223,6 @@ export interface Environment
     TNode,
     TRequest,
     TPayload,
-    TOperation,
   > {
   /**
    * Apply an optimistic update to the environment. The mutation can be reverted
@@ -239,7 +251,7 @@ export interface Environment
   getStore(): Store;
 
   /**
-   * Returns an Observable of ExecutePayload resulting from executing the
+   * Returns an Observable of GraphQLResponse resulting from executing the
    * provided Mutation operation, the result of which is then normalized and
    * committed to the publish queue along with an optional optimistic response
    * or updater.
@@ -254,13 +266,7 @@ export interface Environment
     optimisticResponse?: ?Object,
     updater?: ?SelectorStoreUpdater,
     uploadables?: ?UploadableMap,
-  |}): RelayObservable<ExecutePayload>;
-
-  /**
-   * Checks if the environment is waiting for a response from the network for
-   * a deferred fragment.
-   */
-  isSelectorLoading(selector: Selector): boolean;
+  |}): RelayObservable<GraphQLResponse>;
 }
 
 /**
@@ -271,6 +277,16 @@ export type FragmentPointer = {
   __id: DataID,
   __fragments: {[fragmentName: string]: Variables},
 };
+
+/**
+ * The results of reading a field that was marked with a @match directive
+ */
+export type MatchPointer = {|
+  __id: DataID,
+  __fragments: {[fragmentName: string]: Variables},
+  __fragmentPropName: string,
+  __module: string,
+|};
 
 /**
  * A callback for resolving a Selector from a source.
@@ -311,6 +327,47 @@ export type HandleFieldPayload = $Exact<{
   // handler.
   handleKey: string,
 }>;
+
+/**
+ * A payload that represents data necessary to process the results of a `@match`
+ * directive:
+ * - data: The GraphQL response value for the @match field.
+ * - dataID: The ID of the store object linked to by the @match field.
+ * - operationReference: A reference to a generated module containing the
+ *   SplitOperation with which to normalize the field's `data`.
+ * - variables: Query variables.
+ * - typeName: the type that matched.
+ *
+ * The dataID, variables, and fragmentName can be used to create a Selector
+ * which can in turn be used to normalize and publish the data. The dataID and
+ * typeName can also be used to construct a root record for normalization.
+ */
+export type MatchFieldPayload = {|
+  data: PayloadData,
+  dataID: DataID,
+  operationReference: mixed,
+  typeName: string,
+  variables: Variables,
+|};
+
+/**
+ * A user-supplied object to load a generated operation (SplitOperation) AST
+ * by a module reference. The exact format of a module reference is left to
+ * the application, but it must be a plain JavaScript value (string, number,
+ * or object/array of same).
+ */
+export type OperationLoader = {|
+  /**
+   * Synchronously load an operation, returning either the node or null if it
+   * cannot be resolved synchronously.
+   */
+  get(reference: mixed): ?ConcreteSplitOperation,
+
+  /**
+   * Asynchronously load an operation.
+   */
+  load(reference: mixed): Promise<?ConcreteSplitOperation>,
+|};
 
 /**
  * A function that receives a proxy over the store and may trigger side-effects
@@ -385,9 +442,7 @@ export type MissingFieldHandler =
  */
 export type RelayResponsePayload = {|
   fieldPayloads?: ?Array<HandleFieldPayload>,
-  deferrableSelections?: ?DeferrableSelections,
+  matchPayloads?: ?Array<MatchFieldPayload>,
   source: MutableRecordSource,
   errors: ?Array<PayloadError>,
 |};
-
-export type DeferrableSelections = Set<string>;

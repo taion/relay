@@ -1,5 +1,5 @@
 /**
- * Copyright (c) 2013-present, Facebook, Inc.
+ * Copyright (c) Facebook, Inc. and its affiliates.
  *
  * This source code is licensed under the MIT license found in the
  * LICENSE file in the root directory of this source tree.
@@ -38,7 +38,6 @@ type TGraphQLTaggedNode = GraphQLTaggedNode;
 type TNode = ConcreteFragment;
 type TRequest = ConcreteOperationDefinition;
 type TPayload = Selector;
-type TOperationCompat = any; // unused type for compat with Modern API
 
 export type FragmentMap = CFragmentMap<TFragment>;
 export type OperationSelector = COperationSelector<TNode, TRequest>;
@@ -51,7 +50,6 @@ export type UnstableEnvironmentCore = CUnstableEnvironmentCore<
   TGraphQLTaggedNode,
   TNode,
   TRequest,
-  TOperationCompat,
 >;
 
 /**
@@ -66,7 +64,6 @@ export interface Environment
     TNode,
     TRequest,
     TPayload,
-    TOperationCompat,
   > {
   /**
    * Applies an optimistic mutation to the store without committing it to the

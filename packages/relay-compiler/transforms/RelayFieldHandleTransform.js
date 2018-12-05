@@ -1,5 +1,5 @@
 /**
- * Copyright (c) 2013-present, Facebook, Inc.
+ * Copyright (c) Facebook, Inc. and its affiliates.
  *
  * This source code is licensed under the MIT license found in the
  * LICENSE file in the root directory of this source tree.
@@ -20,6 +20,7 @@ import type {Field} from 'graphql-compiler';
 function relayFieldHandleTransform(context: CompilerContext): CompilerContext {
   return IRTransformer.transform(context, {
     LinkedField: visitField,
+    MatchField: visitField,
     ScalarField: visitField,
   });
 }

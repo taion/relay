@@ -1,5 +1,5 @@
 /**
- * Copyright (c) 2013-present, Facebook, Inc.
+ * Copyright (c) Facebook, Inc. and its affiliates.
  *
  * This source code is licensed under the MIT license found in the
  * LICENSE file in the root directory of this source tree.
@@ -50,6 +50,7 @@ export type CSelector<TNode> = {
 export type CSnapshot<TNode> = CSelector<TNode> & {
   data: ?SelectorData,
   seenRecords: RecordMap,
+  isMissingData: boolean,
 };
 
 /**
@@ -102,8 +103,6 @@ export interface FragmentSpecResolver {
    * Overrides existing callback (if one has been specified).
    */
   setCallback(callback: () => void): void;
-
-  isLoading(): boolean;
 }
 
 export type CFragmentMap<TFragment> = {[key: string]: TFragment};
@@ -135,7 +134,6 @@ export interface CEnvironment<
   TNode,
   TRequest,
   TPayload,
-  TOperation,
 > {
   /**
    * Determine if the selector can be resolved with data in the store (i.e. no
@@ -194,7 +192,6 @@ export interface CEnvironment<
     TGraphQLTaggedNode,
     TNode,
     TRequest,
-    TOperation,
   >;
 }
 
@@ -204,7 +201,6 @@ export interface CUnstableEnvironmentCore<
   TGraphQLTaggedNode,
   TNode,
   TRequest,
-  TOperation,
 > {
   /**
    * Create an instance of a FragmentSpecResolver.
@@ -230,7 +226,6 @@ export interface CUnstableEnvironmentCore<
   createOperationSelector: (
     request: TRequest,
     variables: Variables,
-    operation?: TOperation,
   ) => COperationSelector<TNode, TRequest>;
 
   /**
@@ -245,6 +240,18 @@ export interface CUnstableEnvironmentCore<
    * operation (or batch request).
    */
   getRequest: (node: TGraphQLTaggedNode) => TRequest;
+
+  /**
+   * Given a graphql`...` tagged template, returns true if the value is a
+   * fragment definiton, or false otherwise.
+   */
+  isFragment: (node: TGraphQLTaggedNode) => boolean;
+
+  /**
+   * Given a graphql`...` tagged template, returns true if the value is an
+   * operation or batch request (i.e. query), or false otherwise.
+   */
+  isRequest: (node: TGraphQLTaggedNode) => boolean;
 
   /**
    * Determine if two selectors are equal (represent the same selection). Note

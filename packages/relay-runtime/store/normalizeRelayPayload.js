@@ -1,5 +1,5 @@
 /**
- * Copyright (c) 2013-present, Facebook, Inc.
+ * Copyright (c) Facebook, Inc. and its affiliates.
  *
  * This source code is licensed under the MIT license found in the
  * LICENSE file in the root directory of this source tree.
@@ -28,14 +28,16 @@ function normalizeRelayPayload(
 ): RelayResponsePayload {
   const source = new RelayInMemoryRecordSource();
   source.set(ROOT_ID, RelayModernRecord.create(ROOT_ID, ROOT_TYPE));
-  const {
-    fieldPayloads,
-    deferrableSelections,
-  } = RelayResponseNormalizer.normalize(source, selector, payload, options);
+  const {fieldPayloads, matchPayloads} = RelayResponseNormalizer.normalize(
+    source,
+    selector,
+    payload,
+    options,
+  );
   return {
     errors,
     fieldPayloads,
-    deferrableSelections,
+    matchPayloads,
     source,
   };
 }

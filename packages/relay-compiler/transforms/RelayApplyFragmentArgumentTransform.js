@@ -1,5 +1,5 @@
 /**
- * Copyright (c) 2013-present, Facebook, Inc.
+ * Copyright (c) Facebook, Inc. and its affiliates.
  *
  * This source code is licensed under the MIT license found in the
  * LICENSE file in the root directory of this source tree.
@@ -26,7 +26,6 @@ import type {
   ArgumentValue,
   Condition,
   CompilerContext,
-  DeferrableFragmentSpread,
   Directive,
   Field,
   Fragment,
@@ -130,38 +129,14 @@ function transformFragmentSpread(
   if (!appliedFragment) {
     return null;
   }
-  return {
+  const transformed: FragmentSpread = {
     ...spread,
+    kind: 'FragmentSpread',
     args: [],
     directives,
     name: appliedFragment.name,
   };
-}
-
-function transformDeferrableFragmentSpread(
-  context: CompilerContext,
-  fragments: Map<string, ?Fragment>,
-  scope: Scope,
-  spread: DeferrableFragmentSpread,
-): ?DeferrableFragmentSpread {
-  const directives = transformDirectives(scope, spread.directives);
-  const fragment = context.getFragment(spread.name);
-  const appliedFragment = transformFragment(
-    context,
-    fragments,
-    scope,
-    fragment,
-    spread.fragmentArgs,
-  );
-  if (!appliedFragment) {
-    return null;
-  }
-  return {
-    ...spread,
-    fragmentArgs: [],
-    directives,
-    name: appliedFragment.name,
-  };
+  return transformed;
 }
 
 function transformField<T: Field>(
@@ -172,7 +147,7 @@ function transformField<T: Field>(
 ): ?T {
   const args = transformArguments(scope, field.args);
   const directives = transformDirectives(scope, field.directives);
-  if (field.kind === 'LinkedField') {
+  if (field.kind === 'LinkedField' || field.kind === 'MatchField') {
     const selections = transformSelections(
       context,
       fragments,
@@ -203,7 +178,7 @@ function transformCondition(
   fragments: Map<string, ?Fragment>,
   scope: Scope,
   node: Condition,
-): ?Array<Selection> {
+): ?$ReadOnlyArray<Selection> {
   const condition = transformValue(scope, node.condition);
   invariant(
     condition.kind === 'Literal' || condition.kind === 'Variable',
@@ -242,22 +217,18 @@ function transformSelections(
   context: CompilerContext,
   fragments: Map<string, ?Fragment>,
   scope: Scope,
-  selections: Array<Selection>,
-): ?Array<Selection> {
+  selections: $ReadOnlyArray<Selection>,
+): ?$ReadOnlyArray<Selection> {
   let nextSelections = null;
   selections.forEach(selection => {
     let nextSelection;
-    if (selection.kind === 'InlineFragment') {
+    if (
+      selection.kind === 'InlineFragment' ||
+      selection.kind === 'MatchBranch'
+    ) {
       nextSelection = transformNode(context, fragments, scope, selection);
     } else if (selection.kind === 'FragmentSpread') {
       nextSelection = transformFragmentSpread(
-        context,
-        fragments,
-        scope,
-        selection,
-      );
-    } else if (selection.kind === 'DeferrableFragmentSpread') {
-      nextSelection = transformDeferrableFragmentSpread(
         context,
         fragments,
         scope,
@@ -287,8 +258,8 @@ function transformSelections(
 
 function transformDirectives(
   scope: Scope,
-  directives: Array<Directive>,
-): Array<Directive> {
+  directives: $ReadOnlyArray<Directive>,
+): $ReadOnlyArray<Directive> {
   return directives.map(directive => {
     const args = transformArguments(scope, directive.args);
     return {
@@ -300,8 +271,8 @@ function transformDirectives(
 
 function transformArguments(
   scope: Scope,
-  args: Array<Argument>,
-): Array<Argument> {
+  args: $ReadOnlyArray<Argument>,
+): $ReadOnlyArray<Argument> {
   return args.map(arg => {
     const value = transformValue(scope, arg.value);
     return value === arg.value ? arg : {...arg, value};
@@ -343,7 +314,7 @@ function transformFragment(
   fragments: Map<string, ?Fragment>,
   parentScope: Scope,
   fragment: Fragment,
-  args: Array<Argument>,
+  args: $ReadOnlyArray<Argument>,
 ): ?Fragment {
   const argumentsHash = hashArguments(args, parentScope);
   const fragmentName = argumentsHash
@@ -385,7 +356,7 @@ function transformFragment(
   return transformedFragment;
 }
 
-function hashArguments(args: Array<Argument>, scope: Scope): ?string {
+function hashArguments(args: $ReadOnlyArray<Argument>, scope: Scope): ?string {
   if (!args.length) {
     return null;
   }

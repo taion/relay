@@ -1,5 +1,5 @@
 /**
- * Copyright (c) 2013-present, Facebook, Inc.
+ * Copyright (c) Facebook, Inc. and its affiliates.
  *
  * This source code is licensed under the MIT license found in the
  * LICENSE file in the root directory of this source tree.
@@ -207,6 +207,7 @@ class RelayEnvironment implements Environment, RelayEnvironmentInterface {
       ...selector,
       data,
       seenRecords: (dataIDs: any),
+      isMissingData: false,
     };
   }
 
@@ -358,7 +359,7 @@ class RelayEnvironment implements Environment, RelayEnvironmentInterface {
       operation.variables,
     );
     const request = new RelayQueryRequest(query);
-    request.then(
+    request.getPromise().then(
       payload => {
         if (isDisposed) {
           return;
@@ -385,21 +386,6 @@ class RelayEnvironment implements Environment, RelayEnvironmentInterface {
       this._storeData.getNetworkLayer().sendQueries([request]);
     });
     return {dispose};
-  }
-
-  streamQuery(config: {
-    cacheConfig?: ?CacheConfig,
-    onCompleted?: ?() => void,
-    onError?: ?(error: Error) => void,
-    onNext?: ?(selector: Selector) => void,
-    operation: OperationSelector,
-  }): Disposable {
-    warning(
-      false,
-      'environment.streamQuery() is deprecated. Update to the latest ' +
-        'version of react-relay, and use environment.execute().',
-    );
-    return this.sendQuery(config);
   }
 
   execute({

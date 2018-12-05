@@ -1,5 +1,5 @@
 /**
- * Copyright (c) 2013-present, Facebook, Inc.
+ * Copyright (c) Facebook, Inc. and its affiliates.
  *
  * This source code is licensed under the MIT license found in the
  * LICENSE file in the root directory of this source tree.
@@ -22,17 +22,20 @@ import type {Selection} from './GraphQLIR';
  * variable and passing value for conditions.
  */
 function getIdentifierForSelection(node: Selection): string {
-  if (node.kind === 'LinkedField' || node.kind === 'ScalarField') {
+  if (
+    node.kind === 'LinkedField' ||
+    node.kind === 'ScalarField' ||
+    node.kind === 'MatchField'
+  ) {
     return node.directives.length === 0
       ? node.alias || node.name
       : (node.alias || node.name) + printDirectives(node.directives);
-  } else if (
-    node.kind === 'FragmentSpread' ||
-    node.kind === 'DeferrableFragmentSpread'
-  ) {
+  } else if (node.kind === 'FragmentSpread') {
     return node.args.length === 0
       ? '...' + node.name
       : '...' + node.name + printArguments(node.args);
+  } else if (node.kind === 'MatchBranch') {
+    return node.name + '$' + node.module;
   } else if (node.kind === 'InlineFragment') {
     return 'I:' + node.typeCondition.name;
   } else if (node.kind === 'Condition') {
